@@ -231,27 +231,17 @@ int BN_div(BIGNUM *quotient, BIGNUM *rem, const BIGNUM *numerator,
   bn_set_minimal_width(snum);
   snum->neg = 0;
 
-  // Since we don't want to have special-case logic for the case where snum is
-  // larger than sdiv, we pad snum with enough zeroes without changing its
-  // value.
-  if (snum->width <= sdiv->width + 1) {
-    if (!bn_wexpand(snum, sdiv->width + 2)) {
-      goto err;
-    }
-    for (int i = snum->width; i < sdiv->width + 2; i++) {
-      snum->d[i] = 0;
-    }
-    snum->width = sdiv->width + 2;
-  } else {
-    if (!bn_wexpand(snum, snum->width + 1)) {
-      goto err;
-    }
-    snum->d[snum->width] = 0;
-    snum->width++;
+  // Extend |snum| with zeros to satisfy the long division invariants:
+  // - |snum|, minus the extra word, must have at least |div_n| + 1 words.
+  // - |snum|'s most significant word must be zero to guarantee the first loop
+  //   iteration works with a prefix greater than |sdiv|. (This is the extra u0
+  //   digit in Knuth.)
+  int div_n = sdiv->width;
+  int num_n = snum->width <= div_n + 1 ? div_n + 2 : snum->width + 1;
+  if (!bn_resize_words(snum, num_n)) {
+    goto err;
   }
 
-  int div_n = sdiv->width;
-  int num_n = snum->width;
   int loop = num_n - div_n;
   // Lets setup a 'window' into snum
   // This is the part that corresponds to the current
@@ -277,26 +267,26 @@ int BN_div(BIGNUM *quotient, BIGNUM *rem, const BIGNUM *numerator,
   // for later.
   const int numerator_neg = numerator->neg;
   res->neg = (numerator_neg ^ divisor->neg);
-  if (!bn_wexpand(res, loop + 1)) {
+  if (!bn_wexpand(res, loop - 1)) {
     goto err;
   }
   res->width = loop - 1;
-  BN_ULONG *resp = &(res->d[loop - 1]);
 
   // space for temp
   if (!bn_wexpand(tmp, div_n + 1)) {
     goto err;
   }
 
-  // if res->width == 0 then clear the neg value otherwise decrease
-  // the resp pointer
-  if (res->width == 0) {
-    res->neg = 0;
-  } else {
-    resp--;
-  }
+  // Compute the quotient with a word-by-word long division. Note that Knuth
+  // indexes words from most to least significant, so our index is reversed.
+  // Each loop iteration computes res->d[i] of the quotient and updates snum
+  // with the running remainder. Before each loop iteration, wnum <= sdiv.
+  for (int i = loop - 2; i >= 0; i--, wnump--) {
+    // TODO(crbug.com/358687140): Remove these running pointers.
+    wnum.d--;
+    assert(wnum.d == snum->d + i + 1);
+    assert(wnump == wnum.d + div_n);
 
-  for (int i = 0; i < loop - 1; i++, wnump--, resp--) {
     // the first part of the loop uses the top two words of snum and sdiv to
     // calculate a BN_ULONG q such that | wnum - sdiv * q | < sdiv
     BN_ULONG q, rm = 0;
@@ -305,7 +295,7 @@ int BN_div(BIGNUM *quotient, BIGNUM *rem, const BIGNUM *numerator,
     if (n0 == d0) {
       q = BN_MASK2;
     } else {
-      // n0 < d0
+      assert(n0 < d0);
       bn_div_rem_words(&q, &rm, n0, n1, d0);
 
 #ifdef BN_ULLONG
@@ -343,7 +333,6 @@ int BN_div(BIGNUM *quotient, BIGNUM *rem, const BIGNUM *numerator,
     }
 
     tmp->d[div_n] = bn_mul_words(tmp->d, sdiv->d, div_n, q);
-    wnum.d--;
     // ingore top values of the bignums just sub the two
     // BN_ULONG arrays with bn_sub_words
     if (bn_sub_words(wnum.d, wnum.d, tmp->d, div_n + 1)) {
@@ -360,7 +349,7 @@ int BN_div(BIGNUM *quotient, BIGNUM *rem, const BIGNUM *numerator,
       }
     }
     // store part of the result
-    *resp = q;
+    res->d[i] = q;
   }
 
   bn_set_minimal_width(snum);
