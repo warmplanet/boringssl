@@ -357,9 +357,16 @@ func (hc *halfConn) updateOutSeq() {
 	copy(hc.outSeq[:], hc.seq[:])
 }
 
-func (hc *halfConn) recordHeaderLen() int {
+// writeRecordHeaderLen returns the length of the record header that will be
+// written. Do not use this for the length of a record header when reading, as
+// that can depend on the bytes read.
+func (hc *halfConn) writeRecordHeaderLen() int {
 	if hc.isDTLS {
-		return dtlsRecordHeaderLen
+		// TODO(nharper): Change this to be the actual record header
+		// length that will be written. This will depend on version and
+		// write cipher, as well as configuration or protocol bugs to
+		// exercise all options of the DTLS 1.3 record header.
+		return dtlsMaxRecordHeaderLen
 	}
 	return tlsRecordHeaderLen
 }
@@ -416,9 +423,7 @@ type cbcMode interface {
 // success boolean, the number of bytes to skip from the start of the record in
 // order to get the application payload, the encrypted record type (or 0
 // if there is none), and an optional alert value.
-func (hc *halfConn) decrypt(b *block) (ok bool, prefixLen int, contentType recordType, alertValue alert) {
-	recordHeaderLen := hc.recordHeaderLen()
-
+func (hc *halfConn) decrypt(seq []byte, recordHeaderLen int, b *block) (ok bool, prefixLen int, contentType recordType, alertValue alert) {
 	// pull out payload
 	payload := b.data[recordHeaderLen:]
 
@@ -429,12 +434,6 @@ func (hc *halfConn) decrypt(b *block) (ok bool, prefixLen int, contentType recor
 
 	paddingGood := byte(255)
 	explicitIVLen := 0
-
-	seq := hc.seq[:]
-	if hc.isDTLS {
-		// DTLS sequence numbers are explicit.
-		seq = b.data[3:11]
-	}
 
 	// decrypt
 	if hc.cipher != nil {
@@ -572,7 +571,7 @@ func padToBlockSize(payload []byte, blockSize int, config *Config) (prefix, fina
 
 // encrypt encrypts and macs the data in b.
 func (hc *halfConn) encrypt(b *block, explicitIVLen int, typ recordType) (bool, alert) {
-	recordHeaderLen := hc.recordHeaderLen()
+	recordHeaderLen := hc.writeRecordHeaderLen()
 
 	// mac
 	if hc.mac != nil {
@@ -790,7 +789,7 @@ RestartReadRecord:
 		return c.dtlsDoReadRecord(want)
 	}
 
-	recordHeaderLen := c.in.recordHeaderLen()
+	recordHeaderLen := tlsRecordHeaderLen
 
 	if c.rawInput == nil {
 		c.rawInput = c.in.newBlock()
@@ -873,7 +872,7 @@ RestartReadRecord:
 
 	// Process message.
 	b, c.rawInput = c.in.splitBlock(b, recordHeaderLen+n)
-	ok, off, encTyp, alertValue := c.in.decrypt(b)
+	ok, off, encTyp, alertValue := c.in.decrypt(c.in.seq[:], recordHeaderLen, b)
 
 	// Handle skipping over early data.
 	if !ok && c.skipEarlyData {
@@ -1217,7 +1216,7 @@ func (c *Conn) addTLS13Padding(b *block, recordHeaderLen, recordLen int, typ rec
 }
 
 func (c *Conn) doWriteRecord(typ recordType, data []byte) (n int, err error) {
-	recordHeaderLen := c.out.recordHeaderLen()
+	recordHeaderLen := c.out.writeRecordHeaderLen()
 	b := c.out.newBlock()
 	first := true
 	isClientHello := typ == recordTypeHandshake && len(data) > 0 && data[0] == typeClientHello

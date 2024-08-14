@@ -192,21 +192,6 @@ int BN_div(BIGNUM *quotient, BIGNUM *rem, const BIGNUM *numerator,
   // Acıçmez, Shay Gueron, and Jean-Pierre Seifert. We continue to omit them for
   // simplicity, but this function is no longer used with secret inputs. (We
   // implement a variation on "Smooth CRT-RSA" as described in the paper.)
-  int norm_shift, loop;
-  BIGNUM wnum;
-  BN_ULONG *resp, *wnump;
-  BN_ULONG d0, d1;
-  int num_n, div_n;
-
-  // Invalid zero-padding would have particularly bad consequences.
-  int numerator_width = bn_minimal_width(numerator);
-  int divisor_width = bn_minimal_width(divisor);
-  if ((numerator_width > 0 && numerator->d[numerator_width - 1] == 0) ||
-      (divisor_width > 0 && divisor->d[divisor_width - 1] == 0)) {
-    OPENSSL_PUT_ERROR(BN, BN_R_NOT_INITIALIZED);
-    return 0;
-  }
-
   if (BN_is_zero(divisor)) {
     OPENSSL_PUT_ERROR(BN, BN_R_DIV_BY_ZERO);
     return 0;
@@ -226,13 +211,19 @@ int BN_div(BIGNUM *quotient, BIGNUM *rem, const BIGNUM *numerator,
     goto err;
   }
 
-  // First we normalise the numbers
-  norm_shift = BN_BITS2 - (BN_num_bits(divisor) % BN_BITS2);
+  // First we normalise the numbers such that the divisor's MSB is set. This
+  // ensures, in Knuth's terminology, that v1 >= b/2, needed for the quotient
+  // estimation step.
+  int norm_shift = BN_BITS2 - (BN_num_bits(divisor) % BN_BITS2);
   if (!BN_lshift(sdiv, divisor, norm_shift)) {
     goto err;
   }
   bn_set_minimal_width(sdiv);
   sdiv->neg = 0;
+
+  // TODO(crbug.com/358687140): We also shift the numerator up by one extra
+  // word. This was done for convenience so that |wnump[-2]| below always
+  // exists, but makes the offsets confusing. Remove it.
   norm_shift += BN_BITS2;
   if (!BN_lshift(snum, numerator, norm_shift)) {
     goto err;
@@ -259,25 +250,28 @@ int BN_div(BIGNUM *quotient, BIGNUM *rem, const BIGNUM *numerator,
     snum->width++;
   }
 
-  div_n = sdiv->width;
-  num_n = snum->width;
-  loop = num_n - div_n;
+  int div_n = sdiv->width;
+  int num_n = snum->width;
+  int loop = num_n - div_n;
   // Lets setup a 'window' into snum
   // This is the part that corresponds to the current
   // 'area' being divided
+  BIGNUM wnum;
   wnum.neg = 0;
   wnum.d = &(snum->d[loop]);
   wnum.width = div_n;
   // only needed when BN_ucmp messes up the values between width and max
   wnum.dmax = snum->dmax - loop;  // so we don't step out of bounds
 
-  // Get the top 2 words of sdiv
-  // div_n=sdiv->width;
-  d0 = sdiv->d[div_n - 1];
-  d1 = (div_n == 1) ? 0 : sdiv->d[div_n - 2];
+  // Get the top 2 words of sdiv.
+  const BN_ULONG d0 = sdiv->d[div_n - 1];
+  const BN_ULONG d1 = (div_n == 1) ? 0 : sdiv->d[div_n - 2];
+
+  // The normalization step ensures that |sdiv|'s MSB is one.
+  assert(d0 & (((BN_ULONG)1) << (BN_BITS2 - 1)));
 
   // pointer to the 'top' of snum
-  wnump = &(snum->d[num_n - 1]);
+  BN_ULONG *wnump = &(snum->d[num_n - 1]);
 
   // Setup |res|. |numerator| and |res| may alias, so we save |numerator->neg|
   // for later.
@@ -287,7 +281,7 @@ int BN_div(BIGNUM *quotient, BIGNUM *rem, const BIGNUM *numerator,
     goto err;
   }
   res->width = loop - 1;
-  resp = &(res->d[loop - 1]);
+  BN_ULONG *resp = &(res->d[loop - 1]);
 
   // space for temp
   if (!bn_wexpand(tmp, div_n + 1)) {
@@ -303,13 +297,11 @@ int BN_div(BIGNUM *quotient, BIGNUM *rem, const BIGNUM *numerator,
   }
 
   for (int i = 0; i < loop - 1; i++, wnump--, resp--) {
-    BN_ULONG q, l0;
     // the first part of the loop uses the top two words of snum and sdiv to
     // calculate a BN_ULONG q such that | wnum - sdiv * q | < sdiv
-    BN_ULONG n0, n1, rm = 0;
-
-    n0 = wnump[0];
-    n1 = wnump[-1];
+    BN_ULONG q, rm = 0;
+    BN_ULONG n0 = wnump[0];
+    BN_ULONG n1 = wnump[-1];
     if (n0 == d0) {
       q = BN_MASK2;
     } else {
@@ -350,8 +342,7 @@ int BN_div(BIGNUM *quotient, BIGNUM *rem, const BIGNUM *numerator,
 #endif  // !BN_ULLONG
     }
 
-    l0 = bn_mul_words(tmp->d, sdiv->d, div_n, q);
-    tmp->d[div_n] = l0;
+    tmp->d[div_n] = bn_mul_words(tmp->d, sdiv->d, div_n, q);
     wnum.d--;
     // ingore top values of the bignums just sub the two
     // BN_ULONG arrays with bn_sub_words
