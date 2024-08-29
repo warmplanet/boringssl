@@ -450,7 +450,7 @@ both_builders(
         # The default Android NDK cannot be updated until https://crbug.com/boringssl/454 is fixed.
         # Meanwhile, RISC-V support requires a newer NDK, thus we override for this builder.
         "gclient_vars": {
-            "android_ndk_revision": "wC8sJjVPRDPTbaZFlki_qXTC1lWJNbJi8glUO0woJ1MC"
+            "android_ndk_revision": "wC8sJjVPRDPTbaZFlki_qXTC1lWJNbJi8glUO0woJ1MC",
         },
         "run_unit_tests": False,
         "run_ssl_tests": False,
@@ -810,13 +810,12 @@ both_builders(
         },
     },
 )
-# TODO(crbug.com/42290610): Enable this builder on CI and by default on CQ once
-# it has been confirmed to work.
-cq_builder(
+both_builders(
     "linux_bazel",
     LINUX_HOST,
+    category = "linux",
+    short_name = "bzl",
     recipe = "boringssl_bazel",
-    cq_enabled = False,
 )
 both_builders("mac", MAC_X86_64_HOST, category = "mac", short_name = "dbg")
 both_builders(
@@ -843,13 +842,12 @@ both_builders(
     },
 )
 both_builders("mac_arm64", MAC_ARM64_HOST, category = "mac", short_name = "arm64")
-# TODO(crbug.com/42290610): Enable this builder on CI and by default on CQ once
-# it has been confirmed to work.
-cq_builder(
+both_builders(
     "mac_arm64_bazel",
     MAC_ARM64_HOST,
+    category = "mac",
+    short_name = "bzl",
     recipe = "boringssl_bazel",
-    cq_enabled = False,
 )
 both_builders(
     "win32",
