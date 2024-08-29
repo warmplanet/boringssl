@@ -237,6 +237,7 @@ crypto_internal_headers = [
     "src/crypto/ec_extra/internal.h",
     "src/crypto/err/internal.h",
     "src/crypto/evp/internal.h",
+    "src/crypto/fipsmodule/aes/internal.h",
     "src/crypto/fipsmodule/bcm_interface.h",
     "src/crypto/fipsmodule/bn/internal.h",
     "src/crypto/fipsmodule/bn/rsaz_exp.h",
