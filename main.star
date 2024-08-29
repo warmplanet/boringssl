@@ -810,6 +810,14 @@ both_builders(
         },
     },
 )
+# TODO(crbug.com/42290610): Enable this builder on CI and by default on CQ once
+# it has been confirmed to work.
+cq_builder(
+    "linux_bazel",
+    LINUX_HOST,
+    recipe = "boringssl_bazel",
+    cq_enabled = False,
+)
 both_builders("mac", MAC_X86_64_HOST, category = "mac", short_name = "dbg")
 both_builders(
     "mac_rel",
@@ -835,6 +843,14 @@ both_builders(
     },
 )
 both_builders("mac_arm64", MAC_ARM64_HOST, category = "mac", short_name = "arm64")
+# TODO(crbug.com/42290610): Enable this builder on CI and by default on CQ once
+# it has been confirmed to work.
+cq_builder(
+    "mac_arm64_bazel",
+    MAC_ARM64_HOST,
+    recipe = "boringssl_bazel",
+    cq_enabled = False,
+)
 both_builders(
     "win32",
     WIN_HOST,
