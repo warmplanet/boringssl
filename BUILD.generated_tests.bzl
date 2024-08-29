@@ -2,6 +2,7 @@
 
 test_support_sources = [
     "src/crypto/asn1/internal.h",
+    "src/crypto/bcm_support.h",
     "src/crypto/bio/internal.h",
     "src/crypto/bytestring/internal.h",
     "src/crypto/chacha/internal.h",
@@ -16,7 +17,7 @@ test_support_sources = [
     "src/crypto/ec_extra/internal.h",
     "src/crypto/err/internal.h",
     "src/crypto/evp/internal.h",
-    "src/crypto/fipsmodule/aes/internal.h",
+    "src/crypto/fipsmodule/bcm_interface.h",
     "src/crypto/fipsmodule/bn/internal.h",
     "src/crypto/fipsmodule/bn/rsaz_exp.h",
     "src/crypto/fipsmodule/cipher/internal.h",
@@ -33,7 +34,6 @@ test_support_sources = [
     "src/crypto/fipsmodule/md5/internal.h",
     "src/crypto/fipsmodule/modes/internal.h",
     "src/crypto/fipsmodule/rand/fork_detect.h",
-    "src/crypto/fipsmodule/rand/getrandom_fillin.h",
     "src/crypto/fipsmodule/rand/internal.h",
     "src/crypto/fipsmodule/rsa/internal.h",
     "src/crypto/fipsmodule/service_indicator/internal.h",
@@ -51,6 +51,8 @@ test_support_sources = [
     "src/crypto/pkcs8/internal.h",
     "src/crypto/poly1305/internal.h",
     "src/crypto/pool/internal.h",
+    "src/crypto/rand_extra/getrandom_fillin.h",
+    "src/crypto/rand_extra/sysrand_internal.h",
     "src/crypto/rsa_extra/internal.h",
     "src/crypto/spx/address.h",
     "src/crypto/spx/fors.h",
@@ -1933,5 +1935,5 @@ pki_test_data = [
 ]
 
 urandom_test_sources = [
-    "src/crypto/fipsmodule/rand/urandom_test.cc",
+    "src/crypto/rand_extra/urandom_test.cc",
 ]
