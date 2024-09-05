@@ -375,6 +375,7 @@ add_library(
   src/crypto/keccak/keccak.c
   src/crypto/kyber/kyber.c
   src/crypto/lhash/lhash.c
+  src/crypto/md4/md4.c
   src/crypto/mem.c
   src/crypto/mldsa/mldsa.c
   src/crypto/mlkem/mlkem.cc
