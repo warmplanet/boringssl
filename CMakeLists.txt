@@ -127,10 +127,6 @@ set(
   src/gen/bcm/ghashv8-armv8-apple.S
   src/gen/bcm/ghashv8-armv8-linux.S
   src/gen/bcm/ghashv8-armv8-win.S
-  src/gen/bcm/md5-586-apple.S
-  src/gen/bcm/md5-586-linux.S
-  src/gen/bcm/md5-x86_64-apple.S
-  src/gen/bcm/md5-x86_64-linux.S
   src/gen/bcm/p256-armv8-asm-apple.S
   src/gen/bcm/p256-armv8-asm-linux.S
   src/gen/bcm/p256-armv8-asm-win.S
@@ -198,6 +194,10 @@ set(
   src/gen/crypto/chacha20_poly1305_armv8-win.S
   src/gen/crypto/chacha20_poly1305_x86_64-apple.S
   src/gen/crypto/chacha20_poly1305_x86_64-linux.S
+  src/gen/crypto/md5-586-apple.S
+  src/gen/crypto/md5-586-linux.S
+  src/gen/crypto/md5-x86_64-apple.S
+  src/gen/crypto/md5-x86_64-linux.S
   src/gen/test_support/trampoline-armv4-linux.S
   src/gen/test_support/trampoline-armv8-apple.S
   src/gen/test_support/trampoline-armv8-linux.S
@@ -224,8 +224,6 @@ set(
   src/gen/bcm/ghash-ssse3-x86_64-win.asm
   src/gen/bcm/ghash-x86-win.asm
   src/gen/bcm/ghash-x86_64-win.asm
-  src/gen/bcm/md5-586-win.asm
-  src/gen/bcm/md5-x86_64-win.asm
   src/gen/bcm/p256-x86_64-asm-win.asm
   src/gen/bcm/p256_beeu-x86_64-asm-win.asm
   src/gen/bcm/rdrand-x86_64-win.asm
@@ -245,6 +243,8 @@ set(
   src/gen/crypto/chacha-x86-win.asm
   src/gen/crypto/chacha-x86_64-win.asm
   src/gen/crypto/chacha20_poly1305_x86_64-win.asm
+  src/gen/crypto/md5-586-win.asm
+  src/gen/crypto/md5-x86_64-win.asm
   src/gen/test_support/trampoline-x86-win.asm
   src/gen/test_support/trampoline-x86_64-win.asm
 )
@@ -376,6 +376,7 @@ add_library(
   src/crypto/kyber/kyber.c
   src/crypto/lhash/lhash.c
   src/crypto/md4/md4.c
+  src/crypto/md5/md5.c
   src/crypto/mem.c
   src/crypto/mldsa/mldsa.c
   src/crypto/mlkem/mlkem.cc
