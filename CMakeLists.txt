@@ -414,6 +414,7 @@ add_library(
   src/crypto/rsa_extra/rsa_asn1.c
   src/crypto/rsa_extra/rsa_crypt.c
   src/crypto/rsa_extra/rsa_print.c
+  src/crypto/sha/sha1.c
   src/crypto/siphash/siphash.c
   src/crypto/spx/spx.c
   src/crypto/spx/spx_address.c
