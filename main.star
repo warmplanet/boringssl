@@ -360,6 +360,24 @@ both_builders(
 )
 
 both_builders(
+    "android_aarch64_fips_static_noasm",
+    # The Android FIPS configuration requires a newer device.
+    WALLEYE_HOST,
+    category = "android|aarch64",
+    short_name = "fips3",
+    cq_compile_only = LINUX_HOST,
+    properties = {
+        "android": True,
+        "cmake_args": {
+            "OPENSSL_NO_ASM": "1",
+            "ANDROID_ABI": "arm64-v8a",
+            "ANDROID_PLATFORM": "android-21",
+            "FIPS": "1",
+        },
+    },
+)
+
+both_builders(
     "android_arm",
     WALLEYE_HOST,
     category = "android|thumb",
