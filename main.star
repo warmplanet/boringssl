@@ -14,6 +14,8 @@ lucicfg.config(
 )
 
 REPO_URL = "https://boringssl.googlesource.com/boringssl"
+
+# The default recipe is "boringssl.py"
 RECIPE_BUNDLE = "infra/recipe_bundles/chromium.googlesource.com/chromium/tools/build"
 
 luci.project(
