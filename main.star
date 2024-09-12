@@ -341,6 +341,27 @@ both_builders(
     },
 )
 
+both_builders(
+    "android_aarch64_fips_noasm",
+    # The Android FIPS configuration requires a newer device.
+    WALLEYE_HOST,
+    category = "android|aarch64",
+    short_name = "fips3",
+    cq_compile_only = LINUX_HOST,
+    properties = {
+        "android": True,
+        "cmake_args": {
+            "OPENSSL_NO_ASM": "1",
+            "ANDROID_ABI": "arm64-v8a",
+            "ANDROID_PLATFORM": "android-21",
+            # FIPS mode on Android uses shared libraries.
+            "BUILD_SHARED_LIBS": "1",
+            "FIPS": "1",
+        },
+    },
+)
+
+
 # delocate works on aarch64. Test this by also building the static library mode
 # for android_aarch64_fips. Additionally, urandom_test doesn't work in shared
 # library builds, so this gives Android FIPS coverage for urandom_test.
@@ -354,24 +375,6 @@ both_builders(
     properties = {
         "android": True,
         "cmake_args": {
-            "ANDROID_ABI": "arm64-v8a",
-            "ANDROID_PLATFORM": "android-21",
-            "FIPS": "1",
-        },
-    },
-)
-
-both_builders(
-    "android_aarch64_fips_static_noasm",
-    # The Android FIPS configuration requires a newer device.
-    WALLEYE_HOST,
-    category = "android|aarch64",
-    short_name = "fips3",
-    cq_compile_only = LINUX_HOST,
-    properties = {
-        "android": True,
-        "cmake_args": {
-            "OPENSSL_NO_ASM": "1",
             "ANDROID_ABI": "arm64-v8a",
             "ANDROID_PLATFORM": "android-21",
             "FIPS": "1",
