@@ -137,8 +137,6 @@ func (c *Conn) init() {
 	c.out.config = c.config
 	c.in.conn = c
 	c.out.conn = c
-
-	c.out.updateOutSeq()
 }
 
 // Access to net.Conn methods.
@@ -188,7 +186,6 @@ type halfConn struct {
 	recordNumberEncrypter recordNumberEncrypter
 	mac                   macFunction
 	seq                   [8]byte // 64-bit sequence number
-	outSeq                [8]byte // Mapped sequence number
 
 	nextCipher any         // next encryption state
 	nextMac    macFunction // next MAC algorithm
@@ -280,16 +277,21 @@ func (hc *halfConn) useTrafficSecret(version uint16, suite *cipherSuite, secret 
 	}
 }
 
-// resetCipher changes the cipher state back to no encryption to be able
+// resetCipher resets the cipher state back to no encryption to be able
 // to send an unencrypted ClientHello in response to HelloRetryRequest
 // after 0-RTT data was rejected.
 func (hc *halfConn) resetCipher() {
+	// In all cases, the cipher is set to nil so that second ClientHello
+	// will be sent with no encryption (instead of with early data keys).
 	hc.cipher = nil
-	hc.incEpoch()
+	// TODO(crbug.com/42290594): When handling 0-RTT rejections in DTLS, we
+	// need to reset the epoch to 0 and reset the sequence number to where
+	// it was prior to sending early data (this is different than resetting
+	// it to 0).
 }
 
 // incSeq increments the sequence number.
-func (hc *halfConn) incSeq(isOutgoing bool) {
+func (hc *halfConn) incSeq() {
 	limit := 0
 	increment := uint64(1)
 	if hc.isDTLS {
@@ -308,8 +310,6 @@ func (hc *halfConn) incSeq(isOutgoing bool) {
 	if increment != 0 {
 		panic("TLS: sequence number wraparound")
 	}
-
-	hc.updateOutSeq()
 }
 
 // incNextSeq increments the starting sequence number for the next epoch.
@@ -345,8 +345,6 @@ func (hc *halfConn) incEpoch() {
 			hc.seq[i] = 0
 		}
 	}
-
-	hc.updateOutSeq()
 }
 
 func (hc *halfConn) setEpoch(epoch uint16) {
@@ -359,21 +357,20 @@ func (hc *halfConn) setEpoch(epoch uint16) {
 	for i := range hc.nextSeq {
 		hc.nextSeq[i] = 0
 	}
-	hc.updateOutSeq()
 }
 
-func (hc *halfConn) updateOutSeq() {
-	if hc.config.Bugs.SequenceNumberMapping != nil {
-		seqU64 := binary.BigEndian.Uint64(hc.seq[:])
-		seqU64 = hc.config.Bugs.SequenceNumberMapping(seqU64)
-		binary.BigEndian.PutUint64(hc.outSeq[:], seqU64)
-
-		// The DTLS epoch cannot be changed.
-		copy(hc.outSeq[:2], hc.seq[:2])
-		return
+func (hc *halfConn) sequenceNumberForOutput() []byte {
+	if !hc.isDTLS || hc.config.Bugs.SequenceNumberMapping == nil {
+		return hc.seq[:]
 	}
 
-	copy(hc.outSeq[:], hc.seq[:])
+	var seq [8]byte
+	seqU64 := binary.BigEndian.Uint64(hc.seq[:])
+	seqU64 = hc.config.Bugs.SequenceNumberMapping(seqU64)
+	binary.BigEndian.PutUint64(seq[:], seqU64)
+	// The DTLS epoch cannot be changed.
+	copy(seq[:2], hc.seq[:2])
+	return seq[:]
 }
 
 func (hc *halfConn) explicitIVLen() int {
@@ -560,7 +557,7 @@ func (hc *halfConn) decrypt(seq []byte, recordHeaderLen int, record []byte) (ok 
 			return false, 0, nil, alertBadRecordMAC
 		}
 	}
-	hc.incSeq(false)
+	hc.incSeq()
 
 	return true, contentType, payload, 0
 }
@@ -636,7 +633,7 @@ func (c *Conn) useDTLSPlaintextHeader() bool {
 // (which must be in the last two bytes of the header) should be computed for
 // the unencrypted, unpadded payload. It will be updated, potentially in-place,
 // with the final length.
-func (hc *halfConn) encrypt(record, payload []byte, typ recordType, headerLen int, headerHasLength bool) ([]byte, error) {
+func (hc *halfConn) encrypt(record, payload []byte, typ recordType, headerLen int, headerHasLength bool, seq []byte) ([]byte, error) {
 	prefixLen := len(record)
 	header := record[prefixLen-headerLen:]
 	explicitIVLen := hc.explicitIVLen()
@@ -662,7 +659,7 @@ func (hc *halfConn) encrypt(record, payload []byte, typ recordType, headerLen in
 	}
 
 	if hc.mac != nil {
-		record = append(record, hc.computeMAC(hc.outSeq[:], header, payload)...)
+		record = append(record, hc.computeMAC(seq, header, payload)...)
 	}
 
 	explicitIV := record[prefixLen : prefixLen+explicitIVLen]
@@ -674,13 +671,13 @@ func (hc *halfConn) encrypt(record, payload []byte, typ recordType, headerLen in
 			}
 			c.XORKeyStream(record[prefixLen:], record[prefixLen:])
 		case *tlsAead:
-			nonce := hc.outSeq[:]
+			nonce := seq
 			if hc.isDTLS && hc.version >= VersionTLS13 && !hc.conn.useDTLSPlaintextHeader() {
 				// Unlike DTLS 1.2, DTLS 1.3's nonce construction does not use
 				// the epoch number. We store the epoch and nonce numbers
 				// together, so make a copy without the epoch.
 				nonce = make([]byte, 8)
-				copy(nonce[2:], hc.outSeq[2:])
+				copy(nonce[2:], seq[2:])
 			}
 
 			// Save the explicit IV, if not empty.
@@ -695,7 +692,7 @@ func (hc *halfConn) encrypt(record, payload []byte, typ recordType, headerLen in
 			if hc.version < VersionTLS13 {
 				// (D)TLS 1.2's AD is seq_num || type || version || plaintext length
 				additionalData = make([]byte, 13)
-				copy(additionalData, hc.outSeq[:])
+				copy(additionalData, seq)
 				copy(additionalData[8:], header[:3])
 				additionalData[11] = byte(len(payload) >> 8)
 				additionalData[12] = byte(len(payload))
@@ -736,7 +733,7 @@ func (hc *halfConn) encrypt(record, payload []byte, typ recordType, headerLen in
 		record[prefixLen-2] = byte(n >> 8)
 		record[prefixLen-1] = byte(n)
 	}
-	hc.incSeq(true)
+	hc.incSeq()
 
 	return record, nil
 }
@@ -1292,7 +1289,7 @@ func (c *Conn) doWriteRecord(typ recordType, data []byte) (n int, err error) {
 		record[3] = byte(m >> 8) // encrypt will update this
 		record[4] = byte(m)
 
-		record, err = c.out.encrypt(record, data[:m], typ, tlsRecordHeaderLen, true /* header has length */)
+		record, err = c.out.encrypt(record, data[:m], typ, tlsRecordHeaderLen, true /* header has length */, c.out.seq[:])
 		if err != nil {
 			return
 		}
@@ -1470,7 +1467,7 @@ func (c *Conn) skipPacket(packet []byte) error {
 				return errors.New("tls: sequence mismatch")
 			}
 			copy(c.in.seq[2:], seq)
-			c.in.incSeq(false)
+			c.in.incSeq()
 		} else {
 			if bytes.Compare(seq, c.in.nextSeq[:]) < 0 {
 				return errors.New("tls: sequence mismatch")
