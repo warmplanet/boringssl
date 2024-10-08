@@ -925,17 +925,6 @@ both_builders(
 )
 
 both_builders(
-    "win32_vs2022",
-    WIN_HOST,
-    category = "win|x86",
-    short_name = "vs2022",
-    cq_compile_only = WIN_HOST,  # Reduce CQ cycle times.
-    properties = {
-        "gclient_vars": {"vs_version": "2022"},
-        "msvc_target": "x86",
-    },
-)
-both_builders(
     "win32_clang",
     WIN_HOST,
     category = "win|x86",
@@ -1008,17 +997,6 @@ both_builders(
     },
 )
 
-both_builders(
-    "win64_vs2022",
-    WIN_HOST,
-    category = "win|x64",
-    short_name = "vs2022",
-    cq_compile_only = WIN_HOST,  # Reduce CQ cycle times.
-    properties = {
-        "gclient_vars": {"vs_version": "2022"},
-        "msvc_target": "x64",
-    },
-)
 both_builders(
     "win64_clang",
     WIN_HOST,
