@@ -1,2 +1,2 @@
-This branch contains configurations for BoringSSL's CI and CQ. To modify, edit
-`main.star` and then rerun `./main.star` to regenerate the generated files.
+This branch used to contain configurations for BoringSSL's CI and CQ. It has
+since been moved to the `infra/config` directory of the `master` branch.
