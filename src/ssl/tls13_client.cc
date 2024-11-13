@@ -418,7 +418,10 @@ static enum ssl_hs_wait_t do_read_server_hello(SSL_HANDSHAKE *hs) {
 
   // When offering ECH, |ssl->session| is only offered in ClientHelloInner.
   const bool pre_shared_key_allowed =
-      ssl->session != nullptr && ssl->s3->ech_status != ssl_ech_rejected;
+      ssl->session != nullptr &&
+      ssl_session_get_type(ssl->session.get()) ==
+          SSLSessionType::kPreSharedKey &&
+      ssl->s3->ech_status != ssl_ech_rejected;
   SSLExtension key_share(TLSEXT_TYPE_key_share),
       pre_shared_key(TLSEXT_TYPE_pre_shared_key, pre_shared_key_allowed),
       supported_versions(TLSEXT_TYPE_supported_versions);
@@ -1117,8 +1120,9 @@ UniquePtr<SSL_SESSION> tls13_create_session_with_ticket(SSL *ssl, CBS *body) {
       !CBS_get_u32(body, &session->ticket_age_add) ||
       !CBS_get_u8_length_prefixed(body, &ticket_nonce) ||
       !CBS_get_u16_length_prefixed(body, &ticket) ||
+      CBS_len(&ticket) == 0 ||  //
       !session->ticket.CopyFrom(ticket) ||
-      !CBS_get_u16_length_prefixed(body, &extensions) ||
+      !CBS_get_u16_length_prefixed(body, &extensions) ||  //
       CBS_len(body) != 0) {
     ssl_send_alert(ssl, SSL3_AL_FATAL, SSL_AD_DECODE_ERROR);
     OPENSSL_PUT_ERROR(SSL, SSL_R_DECODE_ERROR);

@@ -722,6 +722,14 @@ func (t *timeoutConn) Write(b []byte) (int, error) {
 	return t.Conn.Write(b)
 }
 
+func expectedReply(b []byte) []byte {
+	ret := make([]byte, len(b))
+	for i, v := range b {
+		ret[i] = v ^ 0xff
+	}
+	return ret
+}
+
 func doExchange(test *testCase, config *Config, conn net.Conn, isResume bool, transcripts *[][]byte, num int) error {
 	if !test.noSessionCache {
 		if config.ClientSessionCache == nil {
@@ -1173,10 +1181,8 @@ func doExchange(test *testCase, config *Config, conn net.Conn, isResume bool, tr
 			}
 		}
 
-		for i, v := range buf {
-			if v != testMessage[i]^0xff {
-				return fmt.Errorf("bad reply contents at byte %d; got %q and wanted %q", i, buf, testMessage)
-			}
+		if expected := expectedReply(testMessage); !bytes.Equal(buf, expected) {
+			return fmt.Errorf("bad reply contents; got %x and wanted %x", buf, expected)
 		}
 
 		if seen := tlsConn.keyUpdateSeen; seen != test.expectUnsolicitedKeyUpdate {
@@ -9253,6 +9259,13 @@ func addResumptionVersionTests() {
 						},
 					})
 				} else if !isBadDTLSResumption {
+					expectedError := ":OLD_SESSION_VERSION_NOT_RETURNED:"
+					if sessionVers.version < VersionTLS13 && resumeVers.version >= VersionTLS13 {
+						// The server will "resume" the session by sending pre_shared_key,
+						// but the shim will not have sent pre_shared_key at all. The shim
+						// should reject this because the extension was not allowed at all.
+						expectedError = ":UNEXPECTED_EXTENSION:"
+					}
 					testCases = append(testCases, testCase{
 						protocol:      protocol,
 						name:          "Resume-Client-Mismatch" + suffix,
@@ -9273,7 +9286,7 @@ func addResumptionVersionTests() {
 							version: resumeVers.version,
 						},
 						shouldFail:    true,
-						expectedError: ":OLD_SESSION_VERSION_NOT_RETURNED:",
+						expectedError: expectedError,
 					})
 				}
 
@@ -12068,12 +12081,17 @@ func addDTLSRetransmitTests() {
 				// version is not yet known. The second ClientHello, in response
 				// to HelloRetryRequest, however, is ACKed.
 				//
-				// TODO(crbug.com/42290594): Test ACKs for the Finished flight.
+				// The shim must additionally process ACKs and retransmit its
+				// Finished flight, possibly interleaved with application data.
+				// (The server may send half-RTT data without Finished.)
 				testCases = append(testCases, testCase{
 					protocol: dtls,
 					name:     "DTLS-Retransmit-Client" + suffix,
 					config: Config{
 						MaxVersion: vers.version,
+						// Require a client certificate, so the Finished flight
+						// is large.
+						ClientAuth: RequireAnyClientCert,
 						Bugs: ProtocolBugs{
 							SendHelloRetryRequestCookie: []byte("cookie"), // Send HelloRetryRequest
 							MaxPacketLength:             512,
@@ -12101,9 +12119,58 @@ func addDTLSRetransmitTests() {
 								c.ReadRetransmit()
 								c.WriteFlight(next)
 							},
+							ACKFlightDTLS: func(c *DTLSController, prev, received []DTLSMessage, records []DTLSRecordNumberInfo) {
+								// The shim will process application data without an ACK.
+								msg := []byte("hello")
+								c.WriteAppData(c.OutEpoch(), msg)
+								c.ReadAppData(c.InEpoch(), expectedReply(msg))
+
+								// After a timeout, the shim will retransmit Finished.
+								c.AdvanceClock(useTimeouts[0])
+								c.ReadRetransmit()
+
+								// Application data still flows.
+								c.WriteAppData(c.OutEpoch(), msg)
+								c.ReadAppData(c.InEpoch(), expectedReply(msg))
+
+								// ACK part of the flight and check that retransmits
+								// are updated.
+								c.WriteACK(c.OutEpoch(), records[len(records)/3:2*len(records)/3])
+								c.AdvanceClock(useTimeouts[1])
+								records = c.ReadRetransmit()
+
+								// ACK the rest. Retransmits should stop.
+								c.WriteACK(c.OutEpoch(), records)
+								for _, t := range useTimeouts[2:] {
+									c.AdvanceClock(t)
+								}
+							},
 						},
 					},
-					flags: slices.Concat(flags, []string{"-mtu", "512", "-curves", strconv.Itoa(int(CurveX25519MLKEM768))}),
+					shimCertificate: &rsaChainCertificate,
+					flags:           slices.Concat(flags, []string{"-mtu", "512", "-curves", strconv.Itoa(int(CurveX25519MLKEM768))}),
+				})
+
+				// If the client never receives an ACK for the Finished flight, it
+				// is eventually fatal.
+				testCases = append(testCases, testCase{
+					protocol: dtls,
+					name:     "DTLS-Retransmit-Client-FinishedTimeout" + suffix,
+					config: Config{
+						MaxVersion: vers.version,
+						Bugs: ProtocolBugs{
+							ACKFlightDTLS: func(c *DTLSController, prev, received []DTLSMessage, records []DTLSRecordNumberInfo) {
+								for _, t := range useTimeouts[:len(useTimeouts)-1] {
+									c.AdvanceClock(t)
+									c.ReadRetransmit()
+								}
+								c.AdvanceClock(useTimeouts[len(useTimeouts)-1])
+							},
+						},
+					},
+					flags:         flags,
+					shouldFail:    true,
+					expectedError: ":READ_TIMEOUT_EXPIRED:",
 				})
 			}
 		}
@@ -13316,7 +13383,7 @@ func addSessionTicketTests() {
 	testCases = append(testCases, testCase{
 		// In TLS 1.2 and below, empty NewSessionTicket messages
 		// mean the server changed its mind on sending a ticket.
-		name: "SendEmptySessionTicket",
+		name: "SendEmptySessionTicket-TLS12",
 		config: Config{
 			MaxVersion: VersionTLS12,
 			Bugs: ProtocolBugs{
@@ -13324,6 +13391,21 @@ func addSessionTicketTests() {
 			},
 		},
 		flags: []string{"-expect-no-session"},
+	})
+
+	testCases = append(testCases, testCase{
+		// In TLS 1.3, empty NewSessionTicket messages are not
+		// allowed.
+		name: "SendEmptySessionTicket-TLS13",
+		config: Config{
+			MaxVersion: VersionTLS13,
+			Bugs: ProtocolBugs{
+				SendEmptySessionTicket: true,
+			},
+		},
+		shouldFail:         true,
+		expectedError:      ":DECODE_ERROR:",
+		expectedLocalError: "remote error: error decoding message",
 	})
 
 	// Test that the server ignores unknown PSK modes.
@@ -13652,6 +13734,43 @@ func addSessionTicketTests() {
 			// has established tickets.
 			flags: []string{"-on-resume-no-ticket"},
 		})
+
+		// SSL_OP_NO_TICKET implies the client must not offer ticket-based
+		// sessions. The client not only should not send the session ticket
+		// extension, but if the server echos the session ID, the client should
+		// reject this.
+		if ver.version < VersionTLS13 {
+			testCases = append(testCases, testCase{
+				name: ver.name + "-NoTicket-NoOffer",
+				config: Config{
+					MinVersion: ver.version,
+					MaxVersion: ver.version,
+				},
+				resumeConfig: &Config{
+					MinVersion: ver.version,
+					MaxVersion: ver.version,
+					Bugs: ProtocolBugs{
+						ExpectNoTLS12TicketSupport: true,
+						// Pretend to accept the session, even though the client
+						// did not offer it. The client should reject this as
+						// invalid. A buggy client will still fail because it
+						// expects resumption, but with a different error.
+						// Ideally, we would test this by actually resuming the
+						// previous session, even though the client did not
+						// provide a ticket.
+						EchoSessionIDInFullHandshake: true,
+					},
+				},
+				resumeSession:        true,
+				expectResumeRejected: true,
+				// Set SSL_OP_NO_TICKET on the second connection, after the first
+				// has established tickets.
+				flags:              []string{"-on-resume-no-ticket"},
+				shouldFail:         true,
+				expectedError:      ":SERVER_ECHOED_INVALID_SESSION_ID:",
+				expectedLocalError: "remote error: illegal parameter",
+			})
+		}
 	}
 }
 
