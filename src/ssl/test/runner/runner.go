@@ -3977,6 +3977,57 @@ read alert 1 0
 		},
 		expectMessageDropped: true,
 	})
+
+	testCases = append(testCases, testCase{
+		protocol: dtls,
+		name:     "DTLS13-MessageCallback-Client",
+		config: Config{
+			MaxVersion: VersionTLS13,
+			MinVersion: VersionTLS13,
+		},
+		flags: []string{
+			"-expect-msg-callback",
+			`write hs 1
+read hs 2
+read hs 8
+read hs 11
+read hs 15
+read hs 20
+write hs 20
+read ack
+read hs 4
+read hs 4
+read alert 1 0
+`,
+		},
+	})
+
+	testCases = append(testCases, testCase{
+		testType: serverTest,
+		protocol: dtls,
+		name:     "DTLS13-MessageCallback-Server",
+		config: Config{
+			MaxVersion: VersionTLS13,
+			MinVersion: VersionTLS13,
+		},
+		flags: []string{
+			"-expect-msg-callback",
+			`read hs 1
+write hs 2
+write hs 8
+write hs 11
+write hs 15
+write hs 20
+read hs 20
+write ack
+write hs 4
+write hs 4
+read ack
+read ack
+read alert 1 0
+`,
+		},
+	})
 }
 
 func addTestForCipherSuite(suite testCipherSuite, ver tlsVersion, protocol protocol) {
@@ -11485,17 +11536,17 @@ func addSignatureAlgorithmTests() {
 	})
 }
 
-// timeouts is the retransmit schedule for BoringSSL. It doubles and
+// timeouts is the default retransmit schedule for BoringSSL. It doubles and
 // caps at 60 seconds. On the 13th timeout, it gives up.
 var timeouts = []time.Duration{
-	1 * time.Second,
-	2 * time.Second,
-	4 * time.Second,
-	8 * time.Second,
-	16 * time.Second,
-	32 * time.Second,
-	60 * time.Second,
-	60 * time.Second,
+	400 * time.Millisecond,
+	800 * time.Millisecond,
+	1600 * time.Millisecond,
+	3200 * time.Millisecond,
+	6400 * time.Millisecond,
+	12800 * time.Millisecond,
+	25600 * time.Millisecond,
+	51200 * time.Millisecond,
 	60 * time.Second,
 	60 * time.Second,
 	60 * time.Second,
@@ -15810,6 +15861,27 @@ func addTLS13HandshakeTests() {
 		},
 		resumeConfig: &Config{
 			MaxVersion: VersionTLS12,
+		},
+		resumeSession: true,
+		earlyData:     true,
+		shouldFail:    true,
+		expectedError: ":WRONG_VERSION_ON_EARLY_DATA:",
+	})
+
+	// Same as above, but the server also sends a warning alert before the
+	// ServerHello. Although the shim predicts TLS 1.3 for 0-RTT, it should
+	// still interpret data before ServerHello in a TLS-1.2-compatible way.
+	testCases = append(testCases, testCase{
+		testType: clientTest,
+		name:     "EarlyDataVersionDowngrade-Client-TLS13-WarningAlert",
+		config: Config{
+			MaxVersion: VersionTLS13,
+		},
+		resumeConfig: &Config{
+			MaxVersion: VersionTLS12,
+			Bugs: ProtocolBugs{
+				SendSNIWarningAlert: true,
+			},
 		},
 		resumeSession: true,
 		earlyData:     true,
