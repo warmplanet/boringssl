@@ -61,6 +61,15 @@ func (m *DTLSMessage) Fragment(offset, length int) DTLSFragment {
 	}
 }
 
+// Split returns two fragments for the message.
+func (m *DTLSMessage) Split(offset int) (DTLSFragment, DTLSFragment) {
+	if m.IsChangeCipherSpec {
+		panic("tls: cannot split ChangeCipherSpec")
+	}
+
+	return m.Fragment(0, offset), m.Fragment(offset, len(m.Data)-offset)
+}
+
 // A DTLSFragment is a DTLS handshake fragment or ChangeCipherSpec, along with
 // the epoch that it is to be sent under.
 type DTLSFragment struct {
@@ -977,10 +986,6 @@ func (c *DTLSController) WriteFlight(msgs []DTLSMessage) {
 			continue
 		}
 
-		if msg.Epoch == 0 && config.Bugs.StrayChangeCipherSpec {
-			fragments = append(fragments, DTLSFragment{Epoch: msg.Epoch, IsChangeCipherSpec: true, Data: []byte{1}})
-		}
-
 		maxLen := config.Bugs.MaxHandshakeRecordLength
 		if maxLen <= 0 {
 			maxLen = 1024
@@ -998,13 +1003,6 @@ func (c *DTLSController) WriteFlight(msgs []DTLSMessage) {
 			fragLen := min(len(msg.Data)-fragOffset, maxLen)
 
 			fragment := msg.Fragment(fragOffset, fragLen)
-			if config.Bugs.FragmentMessageTypeMismatch && fragOffset > 0 {
-				fragment.Type++
-			}
-			if config.Bugs.FragmentMessageLengthMismatch && fragOffset > 0 {
-				fragment.TotalLength++
-			}
-
 			fragments = append(fragments, fragment)
 			if config.Bugs.ReorderHandshakeFragments {
 				// Don't duplicate Finished to avoid the peer
@@ -1020,11 +1018,7 @@ func (c *DTLSController) WriteFlight(msgs []DTLSMessage) {
 			}
 			fragOffset += fragLen
 		}
-		shouldSendTwice := config.Bugs.MixCompleteMessageWithFragments
-		if msg.Type == typeFinished {
-			shouldSendTwice = config.Bugs.RetransmitFinished
-		}
-		if shouldSendTwice {
+		if config.Bugs.MixCompleteMessageWithFragments {
 			fragments = append(fragments, msg.Fragment(0, len(msg.Data)))
 		}
 	}
@@ -1038,8 +1032,6 @@ func (c *DTLSController) WriteFlight(msgs []DTLSMessage) {
 		chunk := fragments[start:end]
 		if config.Bugs.ReorderHandshakeFragments {
 			rand.Shuffle(len(chunk), func(i, j int) { chunk[i], chunk[j] = chunk[j], chunk[i] })
-		} else if config.Bugs.ReverseHandshakeFragments {
-			slices.Reverse(chunk)
 		}
 		start = end
 	}

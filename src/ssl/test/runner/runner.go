@@ -1158,10 +1158,10 @@ func doExchange(test *testCase, config *Config, conn net.Conn, isResume bool, tr
 			continue
 		}
 
-		// Process the KeyUpdate ACK. However many KeyUpdates the runner
+		// Process the KeyUpdate reply. However many KeyUpdates the runner
 		// sends, the shim should respond only once.
 		if test.sendKeyUpdates > 0 && test.keyUpdateRequest == keyUpdateRequested {
-			if err := tlsConn.ReadKeyUpdateACK(); err != nil {
+			if err := tlsConn.ReadKeyUpdate(); err != nil {
 				return err
 			}
 		}
@@ -2808,8 +2808,12 @@ read alert 1 0
 			name:     "FragmentMessageTypeMismatch-DTLS",
 			config: Config{
 				Bugs: ProtocolBugs{
-					MaxHandshakeRecordLength:    2,
-					FragmentMessageTypeMismatch: true,
+					WriteFlightDTLS: func(c *DTLSController, prev, received, next []DTLSMessage, records []DTLSRecordNumberInfo) {
+						f1 := next[0].Fragment(0, 1)
+						f2 := next[0].Fragment(1, 1)
+						f2.Type++
+						c.WriteFragments([]DTLSFragment{f1, f2})
+					},
 				},
 			},
 			shouldFail:    true,
@@ -2820,8 +2824,12 @@ read alert 1 0
 			name:     "FragmentMessageLengthMismatch-DTLS",
 			config: Config{
 				Bugs: ProtocolBugs{
-					MaxHandshakeRecordLength:      2,
-					FragmentMessageLengthMismatch: true,
+					WriteFlightDTLS: func(c *DTLSController, prev, received, next []DTLSMessage, records []DTLSRecordNumberInfo) {
+						f1 := next[0].Fragment(0, 1)
+						f2 := next[0].Fragment(1, 1)
+						f2.TotalLength++
+						c.WriteFragments([]DTLSFragment{f1, f2})
+					},
 				},
 			},
 			shouldFail:    true,
@@ -3532,8 +3540,8 @@ read alert 1 0
 			expectedError:    ":DECODE_ERROR:",
 		},
 		{
-			// Test that KeyUpdates are acknowledged properly.
-			name: "KeyUpdate-RequestACK",
+			// Test that shim responds to KeyUpdate requests.
+			name: "KeyUpdate-Requested",
 			config: Config{
 				MaxVersion: VersionTLS13,
 				Bugs: ProtocolBugs{
@@ -3546,10 +3554,10 @@ read alert 1 0
 			keyUpdateRequest: keyUpdateRequested,
 		},
 		{
-			// Test that KeyUpdates are acknowledged properly if the
+			// Test that shim responds to KeyUpdate requests if
 			// peer's KeyUpdate is discovered while a write is
 			// pending.
-			name: "KeyUpdate-RequestACK-UnfinishedWrite",
+			name: "KeyUpdate-Requested-UnfinishedWrite",
 			config: Config{
 				MaxVersion: VersionTLS13,
 				Bugs: ProtocolBugs{
@@ -12348,7 +12356,7 @@ func addDTLSRetransmitTests() {
 							MaxPacketLength:             512,
 							WriteFlightDTLS: func(c *DTLSController, prev, received, next []DTLSMessage, records []DTLSRecordNumberInfo) {
 								if len(received) == 0 || received[0].Type != typeClientHello {
-									// Leave post-handshake flights alone.
+									// We test post-handshake flights separately.
 									c.WriteFlight(next)
 									return
 								}
@@ -12542,6 +12550,100 @@ func addDTLSRetransmitTests() {
 					},
 					flags: flags,
 				})
+
+				testCases = append(testCases, testCase{
+					protocol: dtls,
+					name:     "DTLS-Retransmit-Client-ACKPostHandshake" + suffix,
+					config: Config{
+						MaxVersion: vers.version,
+						Bugs: ProtocolBugs{
+							WriteFlightDTLS: func(c *DTLSController, prev, received, next []DTLSMessage, records []DTLSRecordNumberInfo) {
+								if next[0].Type != typeNewSessionTicket {
+									c.WriteFlight(next)
+									return
+								}
+
+								// The test should try to send two NewSessionTickets in a row.
+								if len(next) != 2 {
+									panic("unexpected message count")
+								}
+
+								// Send part of first ticket post-handshake message.
+								first0, second0 := next[0].Split(len(next[0].Data) / 2)
+								first1, second1 := next[1].Split(len(next[1].Data) / 2)
+								c.WriteFragments([]DTLSFragment{first0})
+
+								// The shim should ACK on a timer.
+								c.ExpectNextTimeout(useTimeouts[0] / 4)
+								c.AdvanceClock(useTimeouts[0] / 4)
+								c.ReadACK(c.InEpoch())
+
+								// The shim is just waiting for us to retransmit.
+								c.ExpectNoNextTimeout()
+
+								// Send some more fragments.
+								c.WriteFragments([]DTLSFragment{first0, second1})
+
+								// The shim should ACK, again on a timer.
+								c.ExpectNextTimeout(useTimeouts[0] / 4)
+								c.AdvanceClock(useTimeouts[0] / 4)
+								c.ReadACK(c.InEpoch())
+								c.ExpectNoNextTimeout()
+
+								// Finish up both messages. We implicitly test if shim
+								// processed these messages by checking that it returned a new
+								// session.
+								c.WriteFragments([]DTLSFragment{first1, second0})
+
+								// The shim should ACK again, once the timer expires.
+								//
+								// TODO(crbug.com/42290594): Should the shim ACK immediately?
+								// Otherwise KeyUpdates are delayed, which will complicated
+								// downstream testing.
+								c.ExpectNextTimeout(useTimeouts[0] / 4)
+								c.AdvanceClock(useTimeouts[0] / 4)
+								c.ReadACK(c.InEpoch())
+								c.ExpectNoNextTimeout()
+							},
+						},
+					},
+					flags: flags,
+				})
+
+				testCases = append(testCases, testCase{
+					protocol: dtls,
+					name:     "DTLS-Retransmit-Client-ACKPostHandshakeTwice" + suffix,
+					config: Config{
+						MaxVersion: vers.version,
+						Bugs: ProtocolBugs{
+							WriteFlightDTLS: func(c *DTLSController, prev, received, next []DTLSMessage, records []DTLSRecordNumberInfo) {
+								if next[0].Type != typeNewSessionTicket {
+									c.WriteFlight(next)
+									return
+								}
+
+								// The test should try to send two NewSessionTickets in a row.
+								if len(next) != 2 {
+									panic("unexpected message count")
+								}
+
+								// Send the flight. The shim should ACK it.
+								c.WriteFlight(next)
+								c.AdvanceClock(useTimeouts[0] / 4)
+								c.ReadACK(c.InEpoch())
+								c.ExpectNoNextTimeout()
+
+								// Retransmit the flight, as if we lost the ACK. The shim should
+								// ACK again.
+								c.WriteFlight(next)
+								c.AdvanceClock(useTimeouts[0] / 4)
+								c.ReadACK(c.InEpoch())
+								c.ExpectNoNextTimeout()
+							},
+						},
+					},
+					flags: flags,
+				})
 			}
 		}
 	}
@@ -12577,7 +12679,14 @@ func addDTLSRetransmitTests() {
 		config: Config{
 			MaxVersion: VersionTLS12,
 			Bugs: ProtocolBugs{
-				RetransmitFinished: true,
+				WriteFlightDTLS: func(c *DTLSController, prev, received, next []DTLSMessage, records []DTLSRecordNumberInfo) {
+					c.WriteFlight(next)
+					for _, msg := range next {
+						if msg.Type == typeFinished {
+							c.WriteFlight([]DTLSMessage{msg})
+						}
+					}
+				},
 			},
 		},
 	})
@@ -12591,7 +12700,14 @@ func addDTLSRetransmitTests() {
 		resumeConfig: &Config{
 			MaxVersion: VersionTLS12,
 			Bugs: ProtocolBugs{
-				RetransmitFinished: true,
+				WriteFlightDTLS: func(c *DTLSController, prev, received, next []DTLSMessage, records []DTLSRecordNumberInfo) {
+					c.WriteFlight(next)
+					for _, msg := range next {
+						if msg.Type == typeFinished {
+							c.WriteFlight([]DTLSMessage{msg})
+						}
+					}
+				},
 			},
 		},
 		resumeSession: true,
@@ -14315,19 +14431,24 @@ func addChangeCipherSpecTests() {
 		expectedLocalError: "remote error: unexpected message",
 	})
 
-	// Test that, in DTLS, ChangeCipherSpec is not allowed when there are
-	// messages in the handshake queue. Do this by testing the server
-	// reading the client Finished, reversing the flight so Finished comes
-	// first.
+	// Test that, in DTLS 1.2, key changes are not allowed when there are
+	// buffered messages. Do this sending all messages in reverse, so that later
+	// ones are buffered, and leaving Finished unencrypted.
 	testCases = append(testCases, testCase{
 		protocol: dtls,
 		testType: serverTest,
-		name:     "SendUnencryptedFinished-DTLS",
+		name:     "KeyChangeWithBufferedMessages-DTLS",
 		config: Config{
 			MaxVersion: VersionTLS12,
 			Bugs: ProtocolBugs{
-				SendUnencryptedFinished:   true,
-				ReverseHandshakeFragments: true,
+				WriteFlightDTLS: func(c *DTLSController, prev, received, next []DTLSMessage, records []DTLSRecordNumberInfo) {
+					next = slices.Clone(next)
+					slices.Reverse(next)
+					for i := range next {
+						next[i].Epoch = 0
+					}
+					c.WriteFlight(next)
+				},
 			},
 		},
 		shouldFail:    true,
@@ -14425,7 +14546,10 @@ func addChangeCipherSpecTests() {
 			// rejected.
 			MaxVersion: VersionTLS12,
 			Bugs: ProtocolBugs{
-				StrayChangeCipherSpec: true,
+				WriteFlightDTLS: func(c *DTLSController, prev, received, next []DTLSMessage, records []DTLSRecordNumberInfo) {
+					c.WriteFragments([]DTLSFragment{{IsChangeCipherSpec: true, Data: []byte{1}}})
+					c.WriteFlight(next)
+				},
 			},
 		},
 	})
