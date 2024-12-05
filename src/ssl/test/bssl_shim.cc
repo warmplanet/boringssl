@@ -221,19 +221,10 @@ static int DoRead(SSL *ssl, uint8_t *out, size_t max_out) {
   }
   int ret;
   do {
-    if (config->async) {
-      // The DTLS retransmit logic silently ignores write failures. So the test
-      // may progress, allow writes through synchronously. |SSL_read| may
-      // trigger a retransmit, so disconnect the write quota.
-      AsyncBioEnforceWriteQuota(test_state->async_bio, false);
-    }
     ret = CheckIdempotentError("SSL_peek/SSL_read", ssl, [&]() -> int {
       return config->peek_then_read ? SSL_peek(ssl, out, max_out)
                                     : SSL_read(ssl, out, max_out);
     });
-    if (config->async) {
-      AsyncBioEnforceWriteQuota(test_state->async_bio, true);
-    }
 
     // Run the exporter after each read. This is to test that the exporter fails
     // during a renegotiation.
@@ -969,6 +960,9 @@ static bool DoConnection(bssl::UniquePtr<SSL_SESSION> *out_session,
     int ssl_err = SSL_get_error(ssl.get(), -1);
     if (ssl_err != SSL_ERROR_NONE) {
       fprintf(stderr, "SSL error: %s\n", SSL_error_description(ssl_err));
+      if (ssl_err == SSL_ERROR_SYSCALL) {
+        PrintSocketError("OS error");
+      }
     }
     return false;
   }
