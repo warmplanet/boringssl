@@ -2604,10 +2604,9 @@ const char *ssl_server_handshake_state(SSL_HANDSHAKE *hs);
 const char *tls13_client_handshake_state(SSL_HANDSHAKE *hs);
 const char *tls13_server_handshake_state(SSL_HANDSHAKE *hs);
 
-// tls13_add_key_update queues a KeyUpdate message on |ssl|. The
-// |update_requested| argument must be one of |SSL_KEY_UPDATE_REQUESTED| or
-// |SSL_KEY_UPDATE_NOT_REQUESTED|.
-bool tls13_add_key_update(SSL *ssl, int update_requested);
+// tls13_add_key_update queues a KeyUpdate message on |ssl|. |request_type| must
+// be one of |SSL_KEY_UPDATE_REQUESTED| or |SSL_KEY_UPDATE_NOT_REQUESTED|.
+bool tls13_add_key_update(SSL *ssl, int request_type);
 
 // tls13_post_handshake processes a post-handshake message. It returns true on
 // success and false on failure.
@@ -3238,8 +3237,10 @@ struct SSL3_STATE {
   // Channel ID and the |channel_id| field is filled in.
   bool channel_id_valid : 1;
 
-  // key_update_pending is true if we have a KeyUpdate acknowledgment
-  // outstanding.
+  // key_update_pending is true if we are in the process of sending a KeyUpdate
+  // message. As a DoS mitigation (and a requirement in DTLS), we never send
+  // more than one KeyUpdate at once. In DTLS, this tracks whether there is an
+  // unACKed KeyUpdate.
   bool key_update_pending : 1;
 
   // early_data_accepted is true if early data was accepted by the server.
@@ -3533,6 +3534,12 @@ struct DTLSSentRecord {
   uint32_t last_msg_end = 0;
 };
 
+enum class QueuedKeyUpdate {
+  kNone,
+  kUpdateNotRequested,
+  kUpdateRequested,
+};
+
 struct DTLS1_STATE {
   static constexpr bool kAllowUniquePtr = true;
 
@@ -3565,6 +3572,10 @@ struct DTLS1_STATE {
   bool sending_flight : 1;
   bool sending_ack : 1;
 
+  // queued_key_update, if not kNone, indicates we've queued a KeyUpdate message
+  // to send after the current flight is ACKed.
+  QueuedKeyUpdate queued_key_update : 2;
+
   uint16_t handshake_write_seq = 0;
   uint16_t handshake_read_seq = 0;
 
@@ -3577,7 +3588,7 @@ struct DTLS1_STATE {
 
   // write_epoch is the current DTLS write epoch. Non-retransmit records will
   // generally use this epoch.
-  // TODO(crbug.com/42290594): 0-RTT will be the exception, when implemented.
+  // TODO(crbug.com/381113363): 0-RTT will be the exception, when implemented.
   DTLSWriteEpoch write_epoch;
 
   // extra_write_epochs is the collection available write epochs.

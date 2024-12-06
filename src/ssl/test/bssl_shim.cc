@@ -671,7 +671,7 @@ static bool CheckHandshakeProperties(SSL *ssl, bool is_resume,
   }
 
   if (SSL_is_dtls(ssl) && SSL_in_early_data(ssl)) {
-    // TODO(crbug.com/42290594): Support early data for DTLS 1.3.
+    // TODO(crbug.com/381113363): Support early data for DTLS 1.3.
     fprintf(stderr, "DTLS unexpectedly in early data\n");
     return false;
   }
@@ -1196,6 +1196,12 @@ static bool DoExchange(bssl::UniquePtr<SSL_SESSION> *out_session,
     }
     if (!config->shim_shuts_down) {
       for (;;) {
+        if (config->key_update_before_read &&
+            !SSL_key_update(ssl, SSL_KEY_UPDATE_NOT_REQUESTED)) {
+          fprintf(stderr, "SSL_key_update failed.\n");
+          return false;
+        }
+
         // Read only 512 bytes at a time in TLS to ensure records may be
         // returned in multiple reads.
         size_t read_size = config->is_dtls ? 16384 : 512;
